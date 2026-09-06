@@ -1,0 +1,128 @@
+# Smart Market Watchlist. One command: ./run.sh start
+#
+# Six services. Appendix A of the design document maps each one to what it would be
+# in a cloud deployment. No `version:` key - obsolete, and it prints a warning.
+# No `platform:` keys - every image below is multi-arch and must build native.
+
+x-python: &python
+  build:
+    context: ./services
+  image: watchlist-py:local
+  environment: &pythonenv
+    DATABASE_URL: postgresql://watchlist:watchlist@db:5432/watchlist
+    REDIS_URL: redis://cache:6379/0
+    # Containers default to UTC while the market is IST. Without this, every naive
+    # timestamp shifts by 5h30m ONLY inside Docker: buckets land on the wrong trading
+    # day and freshness reads "market closed" through an entire demo - while working
+    # perfectly outside Docker, which is the worst possible failure shape.
+    TZ: Asia/Kolkata
+    PYTHONUNBUFFERED: "1"
+    GRID_SECONDS: "60"
+    SIGMA_WINDOW: "750"
+    PROVIDER: "${PROVIDER:-live}"
+    LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+  networks: [watchlist]
+
+services:
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: watchlist
+      POSTGRES_PASSWORD: watchlist
+      POSTGRES_DB: watchlist
+      TZ: Asia/Kolkata
+    # The volume is disposable, so durability is traded for seed speed. A prototype
+    # choice, stated rather than accidental.
+    command: [postgres, -c, fsync=off, -c, synchronous_commit=off, -c, max_connections=60]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      # -h 127.0.0.1 is load-bearing: during initdb Postgres listens on the unix
+      # socket only, so the default probe goes green while it is still initialising.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U watchlist -d watchlist"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    networks: [watchlist]
+
+  cache:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # appendonly keeps last-known quotes and sigma across a cache restart, so
+    # `docker compose restart cache` does not blank the watchlist.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redisdata:/data]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks: [watchlist]
+
+  # One-shot. Migrates and seeds ten real instruments. Nothing tracked, no history,
+  # no watchlists: the system starts empty and live. Idempotent.
+  bootstrap:
+    <<: *python
+    command: ["python", "-m", "app.bootstrap"]
+    restart: "no"
+    depends_on:
+      db: {condition: service_healthy}
+      cache: {condition: service_healthy}
+
+  api:
+    <<: *python
+    command: [uvicorn, app.api.main:app, --host, 0.0.0.0, --port, "8000", --no-access-log]
+    restart: unless-stopped
+    ports: ["${API_PORT:-8000}:8000"]
+    depends_on:
+      db: {condition: service_healthy}
+      cache: {condition: service_healthy}
+      bootstrap: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz',timeout=2).status==200 else 1)\""]
+      interval: 3s
+      timeout: 4s
+      retries: 20
+      start_period: 3s
+
+  ingestion:
+    <<: *python
+    command: ["python", "-m", "app.ingestion"]
+    # unless-stopped, NOT always: it must survive a crash but STAY DOWN after an
+    # explicit `docker compose stop ingestion`. That is the resilience demo.
+    restart: unless-stopped
+    stop_grace_period: 3s
+    depends_on:
+      db: {condition: service_healthy}
+      cache: {condition: service_healthy}
+      bootstrap: {condition: service_completed_successfully}
+
+  statistics:
+    <<: *python
+    command: ["python", "-m", "app.statistics"]
+    restart: unless-stopped
+    stop_grace_period: 3s
+    depends_on:
+      db: {condition: service_healthy}
+      cache: {condition: service_healthy}
+      bootstrap: {condition: service_completed_successfully}
+
+  web:
+    build:
+      context: ./web
+    image: watchlist-web:local
+    restart: unless-stopped
+    ports: ["${WEB_PORT:-8080}:80"]
+    depends_on:
+      api: {condition: service_healthy}
+    networks: [watchlist]
+
+volumes:
+  pgdata:
+  redisdata:
+
+networks:
+  watchlist:
+    driver: bridge

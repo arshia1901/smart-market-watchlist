@@ -1,0 +1,62 @@
+<div class="combo" role="combobox" [attr.aria-expanded]="open()" aria-haspopup="listbox">
+  <svg class="icon" viewBox="0 0 20 20" aria-hidden="true">
+    <circle cx="9" cy="9" r="6" fill="none" stroke="currentColor" stroke-width="2"/>
+    <line x1="13.5" y1="13.5" x2="18" y2="18" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round"/>
+  </svg>
+
+  <input
+    type="text"
+    autocomplete="off"
+    placeholder="Search stocks by symbol or name…"
+    aria-label="Search stocks"
+    [attr.aria-activedescendant]="highlighted() >= 0 ? 'opt-' + highlighted() : null"
+    [value]="query()"
+    (input)="onInput($any($event.target).value)"
+    (focus)="focus()"
+    (keydown)="onKey($event)" />
+
+  @if (query()) {
+    <button class="clear" type="button" aria-label="Clear" (click)="query.set(''); focus()">×</button>
+  }
+
+  @if (open()) {
+    <ul class="menu" role="listbox">
+      @if (busy() && !options().length) {
+        <li class="empty">searching…</li>
+      } @else if (!options().length) {
+        <li class="empty">nothing matches “{{ query() }}”</li>
+      } @else {
+        @for (o of options(); track o.symbol; let i = $index) {
+          <li
+            role="option"
+            [id]="'opt-' + i"
+            [attr.aria-selected]="i === highlighted()"
+            [class.active]="i === highlighted()"
+            [class.held]="held().has(o.symbol)"
+            (mouseenter)="highlighted.set(i)"
+            (click)="choose(o)">
+
+            <span class="sym">
+              @for (p of parts(o.symbol); track $index) {
+                <span [class.hit]="p.hit">{{ p.text }}</span>
+              }
+            </span>
+
+            <span class="name">
+              @for (p of parts(o.name); track $index) {
+                <span [class.hit]="p.hit">{{ p.text }}</span>
+              }
+            </span>
+
+            @if (o.band_limit !== 'No Band') {
+              <span class="chip" title="This stock has a circuit band">{{ o.band_limit }}</span>
+            }
+
+            <span class="action">{{ held().has(o.symbol) ? 'on your list' : 'Add' }}</span>
+          </li>
+        }
+      }
+    </ul>
+  }
+</div>

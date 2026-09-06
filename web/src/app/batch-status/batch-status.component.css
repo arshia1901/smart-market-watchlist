@@ -1,0 +1,14 @@
+.batch {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px;
+  padding: 8px 12px; margin-bottom: 14px;
+  background: #f9fafb; border: 1px solid #eef0f3; border-radius: 8px;
+  font-size: 11.5px; color: #4b5563; font-variant-numeric: tabular-nums;
+}
+.cadence { font-weight: 650; color: #111827; padding-right: 14px; border-right: 1px solid #e5e7eb; }
+.svc { display: inline-flex; align-items: center; gap: 6px; }
+.svc b { font-weight: 620; color: #374151; }
+.dot { width: 6px; height: 6px; border-radius: 50%; background: #16a34a; flex: none; }
+.svc.stalled .dot { background: #dc2626; }
+.svc.stalled b, .svc.stalled .detail, .svc.stalled .when { color: #b91c1c; }
+.detail { color: #6b7280; }
+.when { color: #9ca3af; }

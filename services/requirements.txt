@@ -1,0 +1,11 @@
+# Deliberately small: every line here is cold-start time on the judge's machine.
+#
+# No numpy. Sigma over 12 x 750 floats is a median and a mean in pure Python;
+# numpy would be the largest wheel in the tree for arithmetic we can write.
+# psycopg[binary] rather than psycopg2: binary wheels mean no gcc, no libpq-dev,
+# and therefore no apt layer in the image at all.
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+psycopg[binary]==3.2.3
+redis==5.2.1
+pytest==8.3.4

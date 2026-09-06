@@ -1,0 +1,126 @@
+:host { display: block; }
+* { box-sizing: border-box; }
+
+.shell {
+  max-width: 1080px; margin: 0 auto; padding: 8px 20px 60px;
+  font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: #16181d;
+}
+
+header { display: flex; justify-content: space-between; align-items: flex-end;
+         gap: 20px; flex-wrap: wrap; margin-bottom: 22px; }
+h1 { font-size: 21px; margin: 0; letter-spacing: -0.01em; }
+.tagline { margin: 3px 0 0; color: #6b7280; font-size: 13px; }
+.tagline em { color: #16181d; font-style: normal; font-weight: 600; }
+
+.clock { display: flex; align-items: center; gap: 7px; font-size: 12px;
+         color: #4b5563; background: #f3f4f6; padding: 6px 11px; border-radius: 999px; }
+.clock .dot { width: 7px; height: 7px; border-radius: 50%; background: #16a34a; }
+.clock.closed .dot { background: #9ca3af; }
+.clock .sep { color: #d1d5db; }
+
+.card { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
+        padding: 14px; margin-bottom: 14px; }
+.login { max-width: 620px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; }
+input { flex: 1; min-width: 180px; padding: 9px 11px; border: 1px solid #d1d5db;
+        border-radius: 7px; font-size: 14px; font-family: inherit; }
+input:focus { outline: 2px solid #2563eb33; border-color: #2563eb; }
+button { padding: 9px 14px; border: 0; border-radius: 7px; background: #111827;
+         color: #fff; font-size: 13px; font-weight: 500; cursor: pointer; font-family: inherit; }
+button:hover { background: #374151; }
+button.ghost { background: #f3f4f6; color: #374151; }
+button.ghost:hover { background: #e5e7eb; }
+button.x { background: none; color: #9ca3af; padding: 2px 7px; font-size: 17px; }
+button.x:hover { color: #dc2626; background: none; }
+
+.results { list-style: none; margin: 11px 0 0; padding: 0; }
+.results li { display: flex; align-items: center; gap: 10px; padding: 7px 0;
+              border-top: 1px solid #f3f4f6; }
+.results li button { margin-left: auto; padding: 5px 11px; }
+
+.context { font-size: 13px; color: #4b5563; margin: 18px 2px 10px; }
+.session-chip { display: inline-block; margin-right: 10px; padding: 2px 8px; border-radius: 999px;
+                background: #eef2ff; color: #3730a3; font-size: 12px; font-weight: 600;
+                font-variant-numeric: tabular-nums; }
+
+table { width: 100%; border-collapse: collapse; }
+th { text-align: right; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+     color: #9ca3af; font-weight: 600; padding: 8px 11px; border-bottom: 1px solid #e5e7eb; }
+th.l, td.l { text-align: left; }
+td { padding: 11px; border-bottom: 1px solid #f3f4f6; text-align: right; vertical-align: middle; }
+td.num { font-variant-numeric: tabular-nums; }
+td.strong { font-weight: 650; font-size: 15px; }
+.sym { font-weight: 620; letter-spacing: -0.01em; }
+td.l .muted { display: block; }
+.muted { color: #9ca3af; }
+.small { font-size: 12px; }
+.up { color: #15803d; }
+.down { color: #b91c1c; }
+.error { color: #b91c1c; margin: 9px 0 0; font-size: 13px; }
+
+/* The band is the whole point of the row, so it carries the emphasis. */
+tr.band-extreme  { background: #fef2f2; }
+tr.band-notable  { background: #fffbeb; }
+tr.band-mild     { background: #fefefe; }
+tr.band-new      { background: #eff6ff; }
+tr.band-at_circuit { background: #f5f3ff; }
+tr.band-corporate_action { background: #f9fafb; color: #6b7280; }
+
+.pill { display: inline-block; padding: 2px 8px; border-radius: 5px; font-size: 11px;
+        font-weight: 650; letter-spacing: 0.02em; }
+.pill.extreme  { background: #dc2626; color: #fff; }
+.pill.notable  { background: #f59e0b; color: #4a2c00; }
+.pill.mild     { background: #e5e7eb; color: #4b5563; }
+.pill.noise    { background: transparent; color: #b9bec7; font-weight: 500; }
+.pill.new      { background: #2563eb; color: #fff; }
+.pill.unrated  { background: #f3f4f6; color: #6b7280; }
+.pill.at_circuit { background: #7c3aed; color: #fff; }
+.pill.corporate_action { background: #374151; color: #fff; }
+.pill.band { background: #ede9fe; color: #5b21b6; }
+
+/* A sigma resting on back-filled history says so. It is honest, and it is also
+   the visible countdown to the stock becoming fully organic. */
+.prov { display: inline-block; margin-left: 6px; font-size: 10px; letter-spacing: 0.03em;
+        color: #6d28d9; border: 1px dashed #c4b5fd; border-radius: 4px; padding: 1px 5px; }
+
+.venue.test { color: #7c3aed; border-color: #c4b5fd; background: #f5f3ff; font-weight: 650; }
+
+.venue { display: inline-block; margin-left: 6px; font-size: 10px; letter-spacing: 0.04em;
+         color: #6b7280; border: 1px solid #e5e7eb; border-radius: 4px; padding: 0 5px; }
+
+.fresh { display: inline-block; margin-left: 7px; font-size: 10px; text-transform: uppercase;
+         letter-spacing: 0.04em; font-weight: 600; }
+.fresh.live { color: #16a34a; }
+.fresh.delayed { color: #ca8a04; }
+.fresh.stale { color: #dc2626; }
+.fresh.market_closed { color: #9ca3af; }
+
+.aside-title { font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em;
+               color: #9ca3af; margin: 30px 0 4px; }
+table.aside td { opacity: 0.92; }
+
+.empty { padding: 28px 18px; text-align: center; border: 1px dashed #d1d5db;
+         border-radius: 10px; color: #374151; margin-top: 6px; }
+.empty p { margin: 0 0 6px; }
+
+footer { margin-top: 34px; padding-top: 14px; border-top: 1px solid #f3f4f6;
+         font-variant-numeric: tabular-nums; }
+
+/* Unmissable, and above the data rather than beside it. A page showing
+   plausible-looking prices owes the reader this before anything else. */
+.banner {
+  background: #fffbeb; border: 1px solid #fcd34d; border-left: 4px solid #f59e0b;
+  border-radius: 8px; padding: 11px 14px; margin-bottom: 18px;
+  font-size: 13px; line-height: 1.55; color: #713f12;
+}
+.banner strong { color: #78350f; }
+.banner.warn { background: #fef2f2; border-color: #fca5a5; border-left-color: #dc2626; color: #7f1d1d; }
+.banner.warn strong { color: #991b1b; }
+.banner .dismiss { float: right; background: none; color: #991b1b; padding: 0 6px; font-size: 12px; text-decoration: underline; }
+.fresh.no_quote { color: #dc2626; }
+.pill.no_quote { background: #fee2e2; color: #991b1b; }
+tr.band-no_quote { background: #fff1f2; }
+.banner .muted { display: block; margin-top: 4px; color: #92722f; font-size: 12px; }
+
+.topline { display: flex; justify-content: flex-end; margin: 0 0 14px; }

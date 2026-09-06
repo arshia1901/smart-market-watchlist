@@ -1,0 +1,420 @@
+<div class="arch">
+  <h1>Architecture</h1>
+  <p class="lede">How the Smart Watchlist is wired, how data moves through it, and what it would take to serve
+    200,000 concurrent users across 20,000 stocks on Google Cloud. Every number below is measured on this running
+    system or derived from it — nothing is estimated for effect.</p>
+
+  <nav class="toc">
+    @for (s of sections; track s[0]) { <a [href]="'#' + s[0]">{{ s[1] }}</a> }
+  </nav>
+
+  <!-- ============================================================ 1. OVERVIEW -->
+  <h2 id="overview">1. High-level architecture</h2>
+  <p>Six containers, one command. The thesis is simple: <strong>the server never does per-user arithmetic.</strong>
+    Everything expensive is asynchronous and shared; the personal work — the ranking — happens in the browser.</p>
+
+  <figure>
+    <svg viewBox="0 0 1000 440" role="img" aria-label="High-level wiring">
+      <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker></defs>
+      <!-- client -->
+      <rect class="box client" x="20" y="150" width="150" height="120" rx="10"/>
+      <text class="lbl" x="95" y="180" text-anchor="middle">Browser (Angular)</text>
+      <text class="sub" x="95" y="200" text-anchor="middle">computes magnitude</text>
+      <text class="sub" x="95" y="215" text-anchor="middle">|r| / (σ·√N), bands, rank</text>
+      <text class="sub" x="95" y="230" text-anchor="middle">polls /api/quotes every 2s</text>
+      <text class="sub" x="95" y="245" text-anchor="middle">/api/watchlist once per session</text>
+      <!-- web -->
+      <rect class="box svc" x="220" y="165" width="130" height="90" rx="10"/>
+      <text class="lbl" x="285" y="195" text-anchor="middle">web · nginx</text>
+      <text class="sub" x="285" y="214" text-anchor="middle">SPA + reverse proxy</text>
+      <text class="sub" x="285" y="229" text-anchor="middle">2s micro-cache on /api/quotes</text>
+      <!-- api -->
+      <rect class="box svc" x="400" y="165" width="140" height="90" rx="10"/>
+      <text class="lbl" x="470" y="195" text-anchor="middle">api · FastAPI</text>
+      <text class="sub" x="470" y="214" text-anchor="middle">serves stored values</text>
+      <text class="sub" x="470" y="229" text-anchor="middle">no per-user maths</text>
+      <!-- stores -->
+      <rect class="box store" x="400" y="320" width="140" height="80" rx="10"/>
+      <text class="lbl" x="470" y="348" text-anchor="middle">db · Postgres 16</text>
+      <text class="sub" x="470" y="366" text-anchor="middle">catalogue · lists · baselines</text>
+      <text class="sub" x="470" y="381" text-anchor="middle">sessions · time series</text>
+      <rect class="box store" x="600" y="320" width="140" height="80" rx="10"/>
+      <text class="lbl" x="670" y="348" text-anchor="middle">cache · Redis 7</text>
+      <text class="sub" x="670" y="366" text-anchor="middle">last-known quote · σ</text>
+      <text class="sub" x="670" y="381" text-anchor="middle">stream · heartbeats</text>
+      <!-- ingestion -->
+      <rect class="box svc" x="600" y="40" width="140" height="90" rx="10"/>
+      <text class="lbl" x="670" y="70" text-anchor="middle">ingestion</text>
+      <text class="sub" x="670" y="89" text-anchor="middle">one tick per minute</text>
+      <text class="sub" x="670" y="104" text-anchor="middle">write-if-newer on event time</text>
+      <!-- statistics -->
+      <rect class="box svc" x="790" y="165" width="195" height="90" rx="10"/>
+      <text class="lbl" x="887" y="195" text-anchor="middle">statistics</text>
+      <text class="sub" x="887" y="214" text-anchor="middle">σ over 750 × 1-min buckets</text>
+      <text class="sub" x="887" y="229" text-anchor="middle">event-driven · allowed to lag</text>
+      <!-- providers -->
+      <rect class="box ext" x="820" y="40" width="130" height="44" rx="10"/>
+      <text class="lbl" x="885" y="67" text-anchor="middle">BSE quote API</text>
+      <rect class="box ext" x="820" y="96" width="130" height="34" rx="10"/>
+      <text class="sub" x="885" y="118" text-anchor="middle">test_quote (canary)</text>
+      <!-- bootstrap -->
+      <rect class="box" x="220" y="330" width="130" height="60" rx="10" stroke-dasharray="4 3"/>
+      <text class="lbl" x="285" y="355" text-anchor="middle">bootstrap</text>
+      <text class="sub" x="285" y="372" text-anchor="middle">one-shot: migrate, seed</text>
+      <!-- arrows -->
+      <path class="arrow" d="M170 210 H220"/>
+      <path class="arrow" d="M350 210 H400"/>
+      <path class="arrow" d="M470 255 V320"/>
+      <text class="edge" x="478" y="292">SQL</text>
+      <path class="arrow" d="M540 230 C 590 230, 620 300, 640 320"/>
+      <text class="edge" x="560" y="262">quotes · σ (fallback → Postgres)</text>
+      <path class="arrow" d="M820 62 H740"/>
+      <path class="arrow dashed" d="M820 113 H740"/>
+      <path class="arrow" d="M670 130 V320"/>
+      <text class="edge" x="662" y="292" text-anchor="end">HSET quote · XADD · beat</text>
+      <path class="arrow" d="M640 130 C 600 200, 540 260, 520 320"/>
+      <text class="edge" x="596" y="160" text-anchor="end">quote_latest · quote_snapshot</text>
+      <path class="arrow" d="M740 330 C 800 320, 850 290, 870 255"/>
+      <text class="edge" x="800" y="306">XREADGROUP →</text>
+      <path class="arrow" d="M850 255 C 810 300, 770 320, 740 345"/>
+      <text class="edge" x="758" y="272">← σ</text>
+      <path class="arrow" d="M350 360 H400"/>
+    </svg>
+    <figcaption>Figure 1 — Wiring between the six containers. Solid arrows carry data; the dashed provider leg is the
+      hand-fed test instrument. The browser is a compute node, not just a view.</figcaption>
+  </figure>
+
+  <h3>Three tiers, and what each one costs</h3>
+  <table>
+    <thead><tr><th>Tier</th><th>Work</th><th>Cost grows with</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Asynchronous, shared</strong></td><td>ingestion, time series, σ</td><td>symbols only</td></tr>
+      <tr><td><strong>Synchronous, shared</strong></td><td>current prices — identical for every user</td><td>nothing; cacheable at the edge</td></tr>
+      <tr><td><strong>Client, personal</strong></td><td>magnitude and ranking</td><td>nothing on our side — each user brings the CPU</td></tr>
+    </tbody>
+  </table>
+  <p>That split is enforced by the API shape rather than by discipline: <code>/api/quotes</code> carries no per-user
+    data whatsoever, so it can be cached once and served to arbitrarily many viewers. The personal payload is
+    fetched once per session, because baselines freeze at sign-in.</p>
+
+  <!-- ============================================================ 2.1 INGESTION -->
+  <h2 id="ingestion">2.1 Ingestion tick</h2>
+  <p>One loop, one cadence — <strong>60 seconds, the real grid</strong>. It re-reads the tracked set every tick, so a
+    stock added from the search box starts being collected on the very next cycle, and a stock removed from the last
+    list holding it stops.</p>
+  <figure>
+    <svg viewBox="0 0 1000 300" role="img" aria-label="Ingestion tick">
+      <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker></defs>
+      <rect class="box store" x="20" y="30" width="150" height="60" rx="10"/>
+      <text class="lbl" x="95" y="55" text-anchor="middle">tracked set</text>
+      <text class="sub" x="95" y="73" text-anchor="middle">Postgres · re-read each tick</text>
+      <rect class="box svc" x="215" y="20" width="200" height="80" rx="10"/>
+      <text class="lbl" x="315" y="47" text-anchor="middle">provider fan-out</text>
+      <text class="sub" x="315" y="66" text-anchor="middle">BSE: one GET per symbol, 12 parallel</text>
+      <text class="sub" x="315" y="81" text-anchor="middle">test leg: read test_quote</text>
+      <rect class="box ext" x="215" y="130" width="200" height="52" rx="10"/>
+      <text class="sub" x="315" y="150" text-anchor="middle">~1.7 s for 10 symbols · 4 s timeout</text>
+      <text class="sub" x="315" y="166" text-anchor="middle">no retry inside a tick</text>
+      <rect class="box store" x="460" y="20" width="200" height="80" rx="10"/>
+      <text class="lbl" x="560" y="47" text-anchor="middle">write-if-newer · Redis Lua</text>
+      <text class="sub" x="560" y="66" text-anchor="middle">compare quote.as_of to stored as_of</text>
+      <text class="sub" x="560" y="81" text-anchor="middle">atomic compare-and-set</text>
+      <!-- three outcomes -->
+      <rect class="box" x="720" y="10" width="260" height="40" rx="8" style="fill:#ecfdf5;stroke:#34d399"/>
+      <text class="lbl" x="850" y="35" text-anchor="middle">APPLIED · newer event time</text>
+      <rect class="box" x="720" y="60" width="260" height="40" rx="8" style="fill:#f8fafc;stroke:#94a3b8"/>
+      <text class="lbl" x="850" y="85" text-anchor="middle">UNCHANGED · same event time</text>
+      <rect class="box" x="720" y="110" width="260" height="40" rx="8" style="fill:#fef2f2;stroke:#fca5a5"/>
+      <text class="lbl" x="850" y="135" text-anchor="middle">LATE · older event time → dropped</text>
+      <!-- applied fan-out -->
+      <rect class="box store" x="450" y="170" width="220" height="110" rx="10"/>
+      <text class="lbl" x="560" y="195" text-anchor="middle">on APPLIED only</text>
+      <text class="sub" x="560" y="215" text-anchor="middle">quote_latest UPSERT where as_of is newer</text>
+      <text class="sub" x="560" y="230" text-anchor="middle">quote_snapshot append</text>
+      <text class="sub" x="560" y="245" text-anchor="middle">stream XADD "quotes"</text>
+      <text class="sub" x="560" y="260" text-anchor="middle">first price → baseline_if_missing</text>
+      <rect class="box store" x="720" y="200" width="260" height="60" rx="10"/>
+      <text class="lbl" x="850" y="225" text-anchor="middle">heartbeat · beat:ingestion</text>
+      <text class="sub" x="850" y="243" text-anchor="middle">last_run · next_run · applied · unchanged · late</text>
+      <path class="arrow" d="M170 60 H215"/>
+      <path class="arrow" d="M415 60 H460"/>
+      <path class="arrow" d="M660 40 H720"/>
+      <path class="arrow" d="M660 60 L720 80"/>
+      <path class="arrow" d="M660 80 L720 130"/>
+      <path class="arrow" d="M560 100 V170"/>
+      <path class="arrow dashed" d="M670 240 H720"/>
+      <text class="edge" x="676" y="234">every tick</text>
+    </svg>
+    <figcaption>Figure 2 — One tick. Only a strictly newer event time is applied. Equal time is the normal outcome every
+      minute on a closed market and is counted as <em>unchanged</em>, never as a fault. Older time is a late packet and is
+      dropped — spec 5.3, the answer to the brief's word <em>conflicting</em>.</figcaption>
+  </figure>
+  <p><strong>Why the event time and not the price.</strong> Feeds retry and deliver out of order. A delayed packet with an
+    older price arriving after a newer one would rewind the price and invert every move. Comparing on the quote's own
+    timestamp — never arrival time — is the one rule that makes last-known-value robust rather than sloppy. A new stamp
+    with the same price <em>is</em> applied: a genuine minute in which the stock didn't move.</p>
+
+  <!-- ============================================================ 2.2 STATISTICS -->
+  <h2 id="statistics">2.2 Statistics engine</h2>
+  <p>Its own container, no dependency on the API. It tails the stream and maintains one σ per stock over a
+    <strong>fixed 750-bucket window</strong> — two trading sessions of one-minute returns, the same window for every stock.</p>
+  <figure>
+    <svg viewBox="0 0 1000 250" role="img" aria-label="Statistics engine">
+      <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker></defs>
+      <rect class="box store" x="15" y="40" width="205" height="70" rx="10"/>
+      <text class="lbl" x="117" y="67" text-anchor="middle">Redis stream "quotes"</text>
+      <text class="sub" x="117" y="86" text-anchor="middle">XREADGROUP · consumer group</text>
+      <text class="sub" x="117" y="100" text-anchor="middle">persistent · replayable · not pub/sub</text>
+      <rect class="box svc" x="240" y="30" width="200" height="90" rx="10"/>
+      <text class="lbl" x="340" y="57" text-anchor="middle">ring buffer per stock</text>
+      <text class="sub" x="340" y="76" text-anchor="middle">last 750 prices → 749 returns</text>
+      <text class="sub" x="340" y="91" text-anchor="middle">12 stocks × 750 floats ≈ 72 KB</text>
+      <text class="sub" x="340" y="106" text-anchor="middle">20,000 stocks ≈ 120 MB</text>
+      <rect class="box svc" x="500" y="20" width="230" height="110" rx="10"/>
+      <text class="lbl" x="615" y="45" text-anchor="middle">sigma_of(returns)</text>
+      <text class="sub" x="615" y="64" text-anchor="middle">median · MAD × 1.4826 → robust scale</text>
+      <text class="sub" x="615" y="79" text-anchor="middle">winsorise at ±5 robust σ</text>
+      <text class="sub" x="615" y="94" text-anchor="middle">population stdev · floor 1e-7</text>
+      <text class="sub" x="615" y="112" text-anchor="middle">full recompute · no accumulator drift</text>
+      <rect class="box store" x="790" y="20" width="190" height="50" rx="10"/>
+      <text class="lbl" x="885" y="42" text-anchor="middle">symbol_stats (Postgres)</text>
+      <text class="sub" x="885" y="59" text-anchor="middle">σ · observations · updated_at</text>
+      <rect class="box store" x="790" y="80" width="190" height="50" rx="10"/>
+      <text class="lbl" x="885" y="102" text-anchor="middle">sigma:SYMBOL (Redis)</text>
+      <text class="sub" x="885" y="119" text-anchor="middle">read by the API</text>
+      <rect class="box" x="240" y="165" width="490" height="66" rx="10" stroke-dasharray="4 3"/>
+      <text class="lbl" x="485" y="187" text-anchor="middle">on boot: rebuild every window from quote_snapshot</text>
+      <text class="sub" x="485" y="205" text-anchor="middle">so stopping the statistics container is safe:</text>
+      <text class="sub" x="485" y="219" text-anchor="middle">the durable record is the time series, not the backlog</text>
+      <path class="arrow" d="M220 75 H240"/>
+      <path class="arrow" d="M440 75 H500"/>
+      <path class="arrow" d="M730 55 H790"/>
+      <path class="arrow" d="M730 95 H790"/>
+      <path class="arrow dashed" d="M340 165 V120"/>
+    </svg>
+    <figcaption>Figure 3 — Event-driven, not timed: σ is recomputed only when a new minute bucket arrives — once per minute
+      per stock while the market is open, never while it is closed. The heartbeat every ~1s is liveness, not recomputation.</figcaption>
+  </figure>
+  <div class="callout">
+    <strong>Why winsorise against MAD and not against σ.</strong> Clipping outliers against σ is circular — the outlier is
+    already inside the estimate you would clip with. The median absolute deviation is not moved by one bad tick. Observed
+    live on the canary: a −20% then +50% jump between consecutive buckets moved σ from 0.0709% to 0.0776%. Unwinsorised it
+    would have inflated roughly 25× and flattened every other stock's signal for two days.
+  </div>
+
+  <!-- ============================================================ 2.3 SESSIONS -->
+  <h2 id="sessions">2.3 Sessions and the shift register</h2>
+  <p>"Since you last checked" is measured from the <strong>start of your previous session</strong>. Sign in is the only
+    event that moves that anchor; refresh reads; sign out closes. A sign-in while one is open is refused (409) rather than
+    silently re-anchoring.</p>
+  <figure>
+    <svg viewBox="0 0 1000 330" role="img" aria-label="Session shift register">
+      <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker></defs>
+      <rect class="box client" x="20" y="30" width="150" height="50" rx="10"/><text class="lbl" x="95" y="60" text-anchor="middle">Sign in (button)</text>
+      <rect class="box svc" x="220" y="20" width="200" height="70" rx="10"/>
+      <text class="lbl" x="320" y="45" text-anchor="middle">open session? → 409</text>
+      <text class="sub" x="320" y="63" text-anchor="middle">"already signed in since HH:MM UTC"</text>
+      <text class="sub" x="320" y="78" text-anchor="middle">sessions are sequential</text>
+      <rect class="box store" x="470" y="10" width="510" height="100" rx="10"/>
+      <text class="lbl" x="725" y="35" text-anchor="middle">THE SHIFT — one transaction, only here</text>
+      <text class="sub" x="725" y="56" text-anchor="middle">user_login:     previous_login_at ← last_login_at        last_login_at ← now</text>
+      <text class="sub" x="725" y="74" text-anchor="middle">watchlist_item:  baseline_value ← session_value            session_value ← price now   (per stock)</text>
+      <text class="sub" x="725" y="96" text-anchor="middle">then INSERT session(token, started_at) · payload built from stored state AFTER the shift</text>
+      <rect class="box client" x="20" y="130" width="150" height="50" rx="10"/><text class="lbl" x="95" y="160" text-anchor="middle">Refresh (F5)</text>
+      <rect class="box svc" x="220" y="125" width="330" height="60" rx="10"/>
+      <text class="lbl" x="385" y="150" text-anchor="middle">GET /api/watchlist — read only</text>
+      <text class="sub" x="385" y="170" text-anchor="middle">401 if no open session · same baselines as sign-in returned</text>
+      <rect class="box client" x="20" y="220" width="150" height="50" rx="10"/><text class="lbl" x="95" y="250" text-anchor="middle">Sign out (button)</text>
+      <rect class="box svc" x="220" y="215" width="330" height="60" rx="10"/>
+      <text class="lbl" x="385" y="240" text-anchor="middle">POST /api/session/logout</text>
+      <text class="sub" x="385" y="260" text-anchor="middle">closes the session · baselines untouched · token forgotten</text>
+      <rect class="box" x="620" y="140" width="360" height="130" rx="10" style="fill:#fffbeb;stroke:#fcd34d"/>
+      <text class="lbl" x="800" y="165" text-anchor="middle">worked example (one stock)</text>
+      <text class="sub" x="800" y="187" text-anchor="middle">sign-in 1 at price 100  →  compare vs 100 · record 100</text>
+      <text class="sub" x="800" y="205" text-anchor="middle">sign-in 2 at price 110  →  compare vs 100 · record 110</text>
+      <text class="sub" x="800" y="223" text-anchor="middle">sign-in 3 at price 120  →  compare vs 110 · record 120</text>
+      <text class="sub" x="800" y="248" text-anchor="middle">refresh anywhere in between → same answer</text>
+      <path class="arrow" d="M170 55 H220"/><path class="arrow" d="M420 55 H470"/>
+      <path class="arrow" d="M170 155 H220"/><path class="arrow" d="M170 245 H220"/>
+    </svg>
+    <figcaption>Figure 4 — Two prices per row and two timestamps per user. An earlier draft kept one column, arguing the
+      browser holds the old baseline for the session. A page refresh disproved it: every move read 0.00%. The shift register is
+      back and the sign-in response is built from stored state <em>after</em> the shift, so it and a refresh can never disagree.</figcaption>
+  </figure>
+  <p><strong>N</strong> is one number per session — trading minutes between the previous session's start and now, counted on the
+    NSE calendar (closed hours add nothing). Because √N is a common factor across every row, N cannot change the
+    <em>ranking</em>; it only scales the band labels. That is why an approximate calendar is safe for ordering and only
+    freshness needs the calendar to be exact.</p>
+
+  <!-- ============================================================ 2.4 READ PATH -->
+  <h2 id="readpath">2.4 Read path: shared vs personal</h2>
+  <figure>
+    <svg viewBox="0 0 1000 300" role="img" aria-label="Read path">
+      <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker></defs>
+      <rect class="box client" x="20" y="90" width="170" height="120" rx="10"/>
+      <text class="lbl" x="105" y="115" text-anchor="middle">Browser</text>
+      <text class="sub" x="105" y="135" text-anchor="middle">r = (price − baseline) / baseline</text>
+      <text class="sub" x="105" y="150" text-anchor="middle">magnitude = |r| / (σ · √N)</text>
+      <text class="sub" x="105" y="165" text-anchor="middle">band, rank (stable sort)</text>
+      <text class="sub" x="105" y="180" text-anchor="middle">freshness ticks locally</text>
+      <text class="sub" x="105" y="195" text-anchor="middle">reads X-Cache-Status</text>
+      <!-- shared lane -->
+      <rect class="box" x="260" y="20" width="720" height="110" rx="10" style="fill:#f0fdf4;stroke:#86efac"/>
+      <text class="lbl" x="620" y="42" text-anchor="middle">SHARED lane — /api/quotes — identical bytes for every user</text>
+      <rect class="box svc" x="280" y="60" width="180" height="55" rx="8"/><text class="lbl" x="370" y="83" text-anchor="middle">nginx micro-cache</text><text class="sub" x="370" y="101" text-anchor="middle">2 s · HIT / STALE / UPDATING</text>
+      <rect class="box svc" x="500" y="60" width="150" height="55" rx="8"/><text class="lbl" x="575" y="83" text-anchor="middle">api</text><text class="sub" x="575" y="101" text-anchor="middle">one origin fetch per 2 s</text>
+      <rect class="box store" x="690" y="60" width="130" height="55" rx="8"/><text class="lbl" x="755" y="83" text-anchor="middle">Redis</text><text class="sub" x="755" y="101" text-anchor="middle">quote:* · sigma:*</text>
+      <rect class="box store" x="840" y="60" width="130" height="55" rx="8"/><text class="lbl" x="905" y="83" text-anchor="middle">Postgres</text><text class="sub" x="905" y="101" text-anchor="middle">fallback if Redis is down</text>
+      <!-- personal lane -->
+      <rect class="box" x="260" y="160" width="720" height="110" rx="10" style="fill:#eef2ff;stroke:#a5b4fc"/>
+      <text class="lbl" x="620" y="182" text-anchor="middle">PERSONAL lane — /api/watchlist — once per session, never cached</text>
+      <rect class="box svc" x="280" y="200" width="180" height="55" rx="8"/><text class="lbl" x="370" y="223" text-anchor="middle">nginx (pass-through)</text>
+      <rect class="box svc" x="500" y="200" width="150" height="55" rx="8"/><text class="lbl" x="575" y="223" text-anchor="middle">api</text><text class="sub" x="575" y="241" text-anchor="middle">baselines · σ · one N</text>
+      <rect class="box store" x="690" y="200" width="280" height="55" rx="8"/><text class="lbl" x="830" y="223" text-anchor="middle">Postgres</text><text class="sub" x="830" y="241" text-anchor="middle">watchlist_item · user_login · symbol_stats</text>
+      <path class="arrow" d="M190 120 C 220 100, 240 90, 280 88"/>
+      <text class="edge" x="196" y="98">every 2 s</text>
+      <path class="arrow" d="M460 88 H500"/><path class="arrow" d="M650 88 H690"/><path class="arrow dashed" d="M820 88 H840"/>
+      <path class="arrow" d="M190 185 C 220 205, 240 220, 280 228"/>
+      <text class="edge" x="196" y="215">once</text>
+      <path class="arrow" d="M460 228 H500"/><path class="arrow" d="M650 228 H690"/>
+    </svg>
+    <figcaption>Figure 5 — The two payloads have opposite cache behaviour, and the split is structural. The client reads
+      nginx's cache-status header so a stale-but-served feed is <em>visible</em>: a red banner after 12 seconds without a fresh
+      answer, never per response (one STALE in every ~7 polls is normal cache refresh).</figcaption>
+  </figure>
+
+  <!-- ============================================================ 2.5 WARM-UP -->
+  <h2 id="warmup">2.5 Warm-up on add — no two-day cold start</h2>
+  <p>σ needs 750 one-minute samples. A stock nobody was collecting has none. Rather than wait two sessions, the system
+    pulls that stock's <strong>real 1-minute bars for today</strong>, measures its real σ, and back-fills the window by
+    resampling those real returns — anchored to end exactly at the live price. Rankable within one minute, with
+    <em>its own</em> volatility, flagged <strong>provisional σ</strong> until genuine history replaces the fill.</p>
+  <figure>
+    <svg viewBox="0 0 1000 200" role="img" aria-label="Warm-up">
+      <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker></defs>
+      <rect class="box client" x="20" y="60" width="120" height="60" rx="10"/><text class="lbl" x="80" y="85" text-anchor="middle">Add stock</text><text class="sub" x="80" y="103" text-anchor="middle">is_tracked = true</text>
+      <rect class="box ext" x="175" y="50" width="205" height="80" rx="10"/><text class="lbl" x="277" y="75" text-anchor="middle">BSE intraday bars</text><text class="sub" x="277" y="94" text-anchor="middle">~380 real 1-min points</text><text class="sub" x="277" y="109" text-anchor="middle">+ header: price · stamp · prev close</text>
+      <rect class="box svc" x="410" y="40" width="200" height="100" rx="10"/><text class="lbl" x="510" y="65" text-anchor="middle">synthesize()</text><text class="sub" x="510" y="84" text-anchor="middle">resample real returns</text><text class="sub" x="510" y="99" text-anchor="middle">build 750 prices backwards</text><text class="sub" x="510" y="114" text-anchor="middle">end exactly at the live price</text><text class="sub" x="510" y="129" text-anchor="middle">fallback: flat at price + typical σ</text>
+      <rect class="box store" x="660" y="50" width="150" height="80" rx="10"/><text class="lbl" x="735" y="75" text-anchor="middle">quote_snapshot</text><text class="sub" x="735" y="94" text-anchor="middle">750 rows · synthetic=true</text><text class="sub" x="735" y="109" text-anchor="middle">+ stream → statistics</text>
+      <rect class="box" x="850" y="50" width="130" height="80" rx="10" style="fill:#f5f3ff;stroke:#c4b5fd"/><text class="lbl" x="915" y="78" text-anchor="middle">provisional σ</text><text class="sub" x="915" y="97" text-anchor="middle">until 750 real buckets</text><text class="sub" x="915" y="112" text-anchor="middle">have displaced the fill</text>
+      <path class="arrow" d="M140 90 H175"/><path class="arrow" d="M380 90 H410"/><path class="arrow" d="M610 90 H660"/><path class="arrow" d="M810 90 H850"/>
+    </svg>
+    <figcaption>Figure 6 — Measured against the real bars, the back-filled σ lands within ~10% (ADANIENT 0.060% vs 0.065%;
+      ADANIPORTS 0.049% vs 0.048%). A flat fill would give σ ≈ 0 and make every first move read <em>extreme</em> — which is
+      why the fill carries the stock's own spread.</figcaption>
+  </figure>
+
+  <!-- ============================================================ 2.6 FAILURE -->
+  <h2 id="failure">2.6 Failure propagation — what the screen says when something dies</h2>
+  <p>The design claims no component outside the read path can take the product down. The stronger rule that came out of
+    testing: <strong>stale is allowed, silent is not.</strong></p>
+  <table>
+    <thead><tr><th>Stop this</th><th>What keeps working</th><th>What the user sees</th></tr></thead>
+    <tbody>
+      <tr><td><code>ingestion</code></td><td>everything serves</td><td>prices stop updating; freshness walks live → delayed → stale; the strip's ingestion dot goes red after two missed cadences</td></tr>
+      <tr><td><code>statistics</code></td><td>everything serves</td><td>σ freezes; new adds stay unrated until it returns; on restart it rebuilds every window from the time series</td></tr>
+      <tr><td><code>cache</code> (Redis)</td><td>API falls back to Postgres</td><td>header flips <em>served by store</em>; strip shows <em>cache down</em></td></tr>
+      <tr><td><code>api</code></td><td>nginx serves its last good <code>/api/quotes</code></td><td>after 12 s: red <em>Feed problem</em> banner; strip: <em>status endpoint unreachable</em>; a failed click names the stock; sign-in says <em>server unavailable</em>, not <em>login failed</em></td></tr>
+      <tr><td><code>db</code> (Postgres)</td><td>shared quotes from Redis</td><td>sign-in fails — the one genuine single point of failure, named rather than demoed</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ============================================================ 3. SCALE -->
+  <h2 id="scale">3. Horizontal scaling on Google Cloud — 200,000 concurrent users, 20,000 stocks</h2>
+  <p>The question is really two questions, and the design keeps them independent:
+    <strong>ingestion cost is O(symbols)</strong>, <strong>serving cost is O(users)</strong>, and neither pushes on the other.
+    Adding the 200,000th user adds exactly zero ingestion work; adding the 20,000th stock adds zero serving work.</p>
+
+  <figure>
+    <img src="assets/arch/gcp-scale.png" alt="Illustration of the Google Cloud target: users through Cloud CDN to autoscaled Cloud Run API instances over Memorystore and Cloud SQL; a market feed through ingestion shards and Pub/Sub into statistics and Bigtable" />
+    <figcaption>Illustration of the target topology (generated). The exact wiring, sizes and the pressure points are in
+      Figure 7 below — treat this one as the picture, that one as the plan.</figcaption>
+  </figure>
+
+  <div class="kpi">
+    <div><b>333 / s</b><span>quote updates at 20,000 stocks on a 1-minute grid — flat regardless of users</span></div>
+    <div><b>7.5 M rows / day</b><span>time series at 20,000 stocks × 375 buckets</span></div>
+    <div><b>120 MB</b><span>σ ring buffers: 20,000 × 750 floats</span></div>
+    <div><b>100,000 req / s</b><span>edge traffic if 200,000 browsers poll /api/quotes every 2 s — all identical bytes</span></div>
+    <div><b>~1 req / 2 s / PoP</b><span>what the origin actually sees behind a CDN with a 2-second TTL</span></div>
+    <div><b>once per session</b><span>the personal payload — the only per-user request</span></div>
+  </div>
+
+  <figure>
+    <svg viewBox="0 0 1000 460" role="img" aria-label="GCP target topology">
+      <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker></defs>
+      <!-- serving axis -->
+      <rect x="15" y="15" width="590" height="430" rx="12" fill="none" stroke="#bae6fd" stroke-dasharray="6 4"/>
+      <text class="lbl" x="30" y="38">SERVING AXIS — grows with users</text>
+      <rect class="box client" x="25" y="70" width="150" height="70" rx="10"/><text class="lbl" x="100" y="97" text-anchor="middle">200,000 browsers</text><text class="sub" x="100" y="116" text-anchor="middle">each ranks its own list</text>
+      <rect class="box gcp" x="200" y="60" width="185" height="90" rx="10"/><text class="lbl" x="292" y="87" text-anchor="middle">Cloud Load Balancer</text><text class="lbl" x="292" y="105" text-anchor="middle">+ Cloud CDN</text><text class="sub" x="292" y="124" text-anchor="middle">/api/quotes cached 2 s at the edge</text><text class="sub" x="292" y="139" text-anchor="middle">personal paths bypass the cache</text>
+      <rect class="box gcp" x="410" y="60" width="180" height="90" rx="10"/><text class="lbl" x="500" y="87" text-anchor="middle">Cloud Run — api</text><text class="sub" x="500" y="106" text-anchor="middle">autoscale on concurrency</text><text class="sub" x="500" y="121" text-anchor="middle">stateless · min instances in hours</text><text class="sub" x="500" y="136" text-anchor="middle">~5–20 instances</text>
+      <rect class="box store" x="200" y="200" width="170" height="80" rx="10"/><text class="lbl" x="285" y="227" text-anchor="middle">Memorystore (Redis)</text><text class="sub" x="285" y="246" text-anchor="middle">quote:* · sigma:* hot set</text><text class="sub" x="285" y="261" text-anchor="middle">cluster mode · no TTL on keys</text>
+      <rect class="box store" x="410" y="200" width="180" height="80" rx="10"/><text class="lbl" x="500" y="227" text-anchor="middle">Cloud SQL (Postgres)</text><text class="sub" x="500" y="246" text-anchor="middle">lists · baselines · sessions</text><text class="sub" x="500" y="261" text-anchor="middle">primary + read replicas</text>
+      <rect class="box" x="200" y="320" width="390" height="100" rx="10" style="fill:#fffbeb;stroke:#fcd34d"/>
+      <text class="lbl" x="395" y="343" text-anchor="middle">the login write is the pressure point</text>
+      <text class="sub" x="395" y="362" text-anchor="middle">each sign-in shifts ~100–200 rows (baseline ← session, session ← price)</text>
+      <text class="sub" x="395" y="377" text-anchor="middle">500 sign-ins/s ≈ 100k row updates/s → one statement per login,</text>
+      <text class="sub" x="395" y="392" text-anchor="middle">then shard by user (Cloud SQL shards, or Spanner / Firestore)</text>
+      <text class="sub" x="395" y="410" text-anchor="middle">personal reads are once per session — replicas absorb them</text>
+      <!-- ingestion axis -->
+      <rect x="620" y="15" width="365" height="430" rx="12" fill="none" stroke="#fed7aa" stroke-dasharray="6 4"/>
+      <text class="lbl" x="635" y="38">INGESTION AXIS — grows with symbols</text>
+      <rect class="box ext" x="635" y="60" width="160" height="70" rx="10"/><text class="lbl" x="715" y="85" text-anchor="middle">market data vendor</text><text class="sub" x="715" y="104" text-anchor="middle">websocket / bulk feed</text><text class="sub" x="715" y="119" text-anchor="middle">(per-symbol HTTP won't do)</text>
+      <rect class="box gcp" x="820" y="60" width="150" height="70" rx="10"/><text class="lbl" x="895" y="85" text-anchor="middle">Cloud Scheduler</text><text class="sub" x="895" y="104" text-anchor="middle">tick every minute</text>
+      <rect class="box gcp" x="635" y="160" width="335" height="70" rx="10"/><text class="lbl" x="802" y="185" text-anchor="middle">ingestion shards — Cloud Run jobs / GKE</text><text class="sub" x="802" y="204" text-anchor="middle">20,000 symbols ÷ k shards by hash · write-if-newer as-is</text><text class="sub" x="802" y="219" text-anchor="middle">e.g. 20 shards × 1,000 symbols → ~17 updates/s each</text>
+      <rect class="box gcp" x="635" y="255" width="150" height="60" rx="10"/><text class="lbl" x="710" y="280" text-anchor="middle">Pub/Sub</text><text class="sub" x="710" y="298" text-anchor="middle">the stream, at scale</text>
+      <rect class="box gcp" x="820" y="255" width="150" height="60" rx="10"/><text class="lbl" x="895" y="280" text-anchor="middle">statistics workers</text><text class="sub" x="895" y="298" text-anchor="middle">by symbol · 120 MB total</text>
+      <rect class="box store" x="635" y="345" width="335" height="70" rx="10"/><text class="lbl" x="802" y="370" text-anchor="middle">Bigtable — the time series</text><text class="sub" x="802" y="389" text-anchor="middle">row key symbol#reverse_ts · 7.5 M rows/day</text><text class="sub" x="802" y="404" text-anchor="middle">write-heavy, read-rare · BigQuery for cold history</text>
+      <!-- arrows -->
+      <path class="arrow" d="M160 105 H200"/><path class="arrow" d="M370 105 H410"/>
+      <path class="arrow" d="M470 150 C 420 180, 330 190, 300 200"/><text class="edge" x="360" y="178">quotes · σ</text>
+      <path class="arrow" d="M500 150 V200"/><text class="edge" x="508" y="180">personal</text>
+      <path class="arrow" d="M795 95 H820" style="marker-end:none"/><path class="arrow" d="M895 130 V160"/><path class="arrow" d="M715 130 V160"/>
+      <path class="arrow" d="M710 230 V255"/><path class="arrow" d="M785 285 H820"/><path class="arrow" d="M802 315 V345"/>
+      <path class="arrow" d="M640 300 C 560 335, 430 318, 330 282"/><text class="edge" x="500" y="312" text-anchor="middle">σ · last known → Memorystore</text>
+    </svg>
+    <figcaption>Figure 7 — Two independent axes. Left grows with users and is absorbed by the CDN and stateless API; right grows with
+      symbols and is absorbed by sharding. The maths, the API shape and the client computation are identical to the prototype.</figcaption>
+  </figure>
+
+  <h3>What it would take — component by component</h3>
+  <table>
+    <thead><tr><th>Component</th><th>Runs locally as</th><th>GCP target</th><th>Sized for 200k users / 20k stocks</th></tr></thead>
+    <tbody>
+      <tr><td>Web + edge cache</td><td>nginx, 2 s micro-cache</td><td>Cloud Load Balancer + Cloud CDN; SPA on Cloud Storage</td><td>100k req/s of identical bytes at the edge; origin ~1 req / 2 s per PoP</td></tr>
+      <tr><td>Read API</td><td>one FastAPI container</td><td>Cloud Run, autoscaled on concurrency</td><td>personal payload only: ~500 sign-ins/s peak → ~5–20 instances; quotes served from cache</td></tr>
+      <tr><td>Hot cache</td><td>Redis container</td><td>Memorystore for Redis, cluster mode</td><td>20k quote hashes + 20k σ strings ≈ a few MB; reads are origin-only behind the CDN</td></tr>
+      <tr><td>OLTP</td><td>Postgres container</td><td>Cloud SQL Postgres, HA, read replicas → shard by user / Spanner when login writes exceed one primary</td><td>200k users × 150 rows = 30 M watchlist rows; ~100k row updates/s at peak sign-in → batched, then sharded</td></tr>
+      <tr><td>Time series</td><td>Postgres table</td><td>Bigtable (hot), BigQuery (cold)</td><td>7.5 M rows/day, ~2.7 B rows/year at ~60 B → ~160 GB/year</td></tr>
+      <tr><td>Ingestion</td><td>one container, per-symbol HTTP</td><td>Cloud Scheduler → Cloud Run jobs (or a GKE deployment), sharded by symbol hash, fed by a vendor websocket</td><td>333 updates/s total; 20 shards → ~17/s each; write-if-newer per shard unchanged</td></tr>
+      <tr><td>Subscription</td><td>Redis Stream</td><td>Pub/Sub (at-least-once, ordered per symbol key)</td><td>333 msg/s — trivial</td></tr>
+      <tr><td>Statistics</td><td>one container</td><td>sharded workers (Cloud Run / GKE), same symbol hash</td><td>333 σ recomputes/s over 750 floats each; 120 MB of windows total</td></tr>
+      <tr><td>Client compute</td><td>the browser</td><td>the browser</td><td>200,000 CPUs we do not pay for — each ranks its own 150 rows</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Two ways to read "200,000 concurrent"</h3>
+  <p><strong>As 200,000 open pages polling.</strong> The shared payload is identical for everyone, so the edge answers it
+    and the origin sees a trickle. The only per-user request is one <code>/api/watchlist</code> per session. This is the
+    cheapest correct architecture and it is what the prototype already does; the CDN simply replaces nginx's 2-second cache.</p>
+  <p><strong>As 200,000 open sockets.</strong> If sub-second push is required, replace polling with a fan-out tier: WebSocket
+    servers on GKE (or Cloud Run with session affinity) that subscribe to the shared quote frame once and broadcast it —
+    200,000 connections × one small frame per minute is a few GB of connection state across a handful of nodes. Nothing
+    upstream changes; the shared/personal split is what makes the broadcast a single message.</p>
+
+  <h3>What does <em>not</em> change</h3>
+  <ul>
+    <li>The formula and where it runs — <code>|r| / (σ·√N)</code> in the browser. Serving cost per user stays near zero.</li>
+    <li>Write-if-newer on event time, per shard. Sharding by symbol keeps each symbol's ordering local.</li>
+    <li>The two-payload API shape. It is the reason the CDN can do the heavy lifting at all.</li>
+    <li>σ's window and its event-driven cadence — 750 one-minute samples, recomputed only when a bucket arrives.</li>
+  </ul>
+
+  <div class="callout red">
+    <strong>The honest constraints.</strong> A free per-symbol HTTP feed cannot serve 20,000 symbols a minute; this needs a licensed
+    vendor feed. No free source for Indian equities is licence-clean, and a product at this scale must have a data contract.
+    The login write amplification is real and is the first thing to re-architect past a single Postgres primary. Everything
+    else on this page is a hosting decision, not a redesign — the seams are already process boundaries in the prototype.
+  </div>
+</div>

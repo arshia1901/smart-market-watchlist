@@ -1,0 +1,169 @@
+<div class="shell">
+  <div class="topline">
+    @if (feed(); as f) {
+      <div class="clock" [class.closed]="!f.market_open">
+        <span class="dot"></span>
+        <span>{{ f.market_open ? 'market open' : 'market closed' }}</span>
+        <span class="sep">·</span>
+        <span>{{ clockIst() }}</span>
+        <span class="sep">·</span>
+        <span>served by {{ f.served_by }}</span>
+      </div>
+    }
+  </div>
+
+
+  @if (feed()?.data_source === 'simulated') {
+    <div class="banner" role="note">
+      <strong>Simulated data.</strong>
+      Prices are replayed from a generated fixture — real NSE symbols and real
+      closing prices from 4 Sep as starting points, but every movement after that is
+      synthetic, and the volatilities and events were planted deliberately.
+      <span class="muted">Two instruments (NEWLIST, SMALLCAP) are invented outright,
+      so the <em>unrated</em> and <em>at circuit</em> states have something to happen to.</span>
+    </div>
+  }
+
+  <app-batch-status />
+
+  @if (feedIssue(); as msg) {
+    <div class="banner warn" role="alert"><strong>Feed problem.</strong> {{ msg }}</div>
+  }
+  @if (notice(); as n) {
+    <div class="banner warn" role="alert">
+      {{ n }}
+      <button class="dismiss" type="button" (click)="notice.set(null)">dismiss</button>
+    </div>
+  }
+
+  @if (loading()) {
+    <p class="muted">loading…</p>
+  } @else if (!payload()) {
+    <section class="card login">
+      <h2>Sign in</h2>
+      <p class="muted small">
+        Authentication is deliberately not engineered — hardcoded users, password same as
+        the name. Its only job is showing that two people see different things from one
+        shared price stream. <strong>Sessions are explicit:</strong> Sign in starts one and
+        anchors your baselines; Sign out ends it. Signing in while already signed in is
+        refused, so a session can never be opened by accident.
+      </p>
+      <div class="row">
+        <input placeholder="asha, ravi or meera" [(ngModel)]="username"
+               (keyup.enter)="doLogin()" />
+        <input placeholder="password (same as name)" type="password" [(ngModel)]="password"
+               (keyup.enter)="doLogin()" />
+        <button (click)="doLogin()">Sign in</button>
+      </div>
+      @if (error()) { <p class="error">{{ error() }}</p> }
+    </section>
+  } @else {
+    <section class="card">
+      <div class="row">
+        <app-stock-search [existing]="heldSymbols()" (picked)="add($event)" />
+        <button class="ghost" (click)="reRank()" title="Re-sort now">Re-rank</button>
+        <button class="ghost" (click)="logout()">Sign out</button>
+      </div>
+    </section>
+
+    <section class="context">
+      <span class="session-chip">{{ sessionStarted() }}</span>
+      Comparing against <strong>{{ comparedTo() }}</strong> —
+      <strong>{{ gap() }}</strong> of market time.
+      Closed hours don't count, so a weekend adds nothing.
+      Signed in as <strong>{{ payload()!.user }}</strong>.
+    </section>
+
+    @if (!rows().length) {
+      <section class="empty">
+        <p><strong>Your list is empty.</strong> Search above to add a stock.</p>
+        <p class="muted small">
+          The moment you add one, it starts being collected live from BSE on a
+          one-minute cadence, and its volatility is measured from today's real
+          intraday bars so it can be ranked within a minute rather than in two days.
+        </p>
+      </section>
+    }
+
+    <table [hidden]="!rows().length">
+      <thead>
+        <tr>
+          <th class="l">Stock</th>
+          <th>Price</th>
+          <th>Move</th>
+          <th>Magnitude</th>
+          <th class="l">Assessment</th>
+          <th>As of</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (r of ranked(); track r.row.symbol) {
+          <tr [class]="'band-' + r.band">
+            <td class="l">
+              <span class="sym">{{ r.row.symbol }}</span>
+              <span class="muted small">{{ r.row.name }}</span>
+            </td>
+            <td class="num">{{ fmt(r.price) }}</td>
+            <td class="num" [class.up]="(r.changePct ?? 0) > 0" [class.down]="(r.changePct ?? 0) < 0">
+              {{ signed(r.changePct) }}
+            </td>
+            <td class="num strong">{{ fmt(r.magnitude) }}</td>
+            <td class="l">
+              <span class="pill {{ r.band }}">{{ label(r.band) }}</span>
+              @if (r.row.sigma_provisional) {
+                <span class="prov" title="σ is back-filled from one real session and marked provisional until two full sessions of genuine history have replaced it">provisional σ</span>
+              }
+            </td>
+            <td class="num muted small">
+              {{ age(r) }}
+              <span class="fresh {{ r.freshness }}">{{ freshLabel(r) }}</span>
+              @if (r.source) {
+                <span class="venue" [class.test]="r.source === 'test'"
+                      [title]="r.source === 'test'
+                        ? 'A test instrument. Its quotes are set by hand through /api/test/quote and never come from an exchange.'
+                        : 'Quoted on the Bombay Stock Exchange. NSE prices for the same stock differ by a normal inter-exchange spread, typically ~0.1%.'">
+                  {{ r.source.toUpperCase() }}
+                </span>
+              }
+            </td>
+            <td><button class="x" (click)="remove(r.row.symbol)" title="Remove">×</button></td>
+          </tr>
+        }
+      </tbody>
+    </table>
+
+    @if (aside().length) {
+      <h3 class="aside-title">Not ranked</h3>
+      <p class="muted small">
+        These cannot be scored yet, so they are listed rather than ranked — never given a
+        default that would put them in a position they did not earn.
+        @if (anyNoQuote()) { <strong>Some have received no quote from the feed at all — that is a feed problem, not a property of the stock.</strong> }
+      </p>
+      <table class="aside">
+        <tbody>
+          @for (r of aside(); track r.row.symbol) {
+            <tr [class]="'band-' + r.band">
+              <td class="l">
+                <span class="sym">{{ r.row.symbol }}</span>
+                <span class="muted small">{{ r.row.name }}</span>
+              </td>
+              <td class="num">{{ fmt(r.price) }}</td>
+              <td class="num">{{ signed(r.changePct) }}</td>
+              <td class="l"><span class="pill {{ r.band }}">{{ label(r.band) }}</span></td>
+              <td class="num muted small">{{ age(r) }}</td>
+              <td><button class="x" (click)="remove(r.row.symbol)">×</button></td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+  }
+
+  <footer class="muted small">
+    magnitude = |return| / (σ × √N) &nbsp;·&nbsp; N = {{ gap() }} of trading
+    &nbsp;·&nbsp; σ over 750 one-minute samples (two trading sessions)
+    &nbsp;·&nbsp; prices are <strong>BSE</strong> last trades — Yahoo/NSE figures for the same stock differ by a normal ~0.1% inter-exchange spread
+    &nbsp;·&nbsp; computed in your browser, never on the server
+  </footer>
+</div>

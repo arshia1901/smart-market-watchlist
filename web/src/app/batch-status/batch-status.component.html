@@ -1,0 +1,43 @@
+@if (unreachableSince()) {
+  <div class="batch">
+    <span class="svc stalled"><span class="dot"></span><b>status endpoint unreachable</b>
+      <span class="detail">for {{ unreachableFor() }}s — the API is not answering; nothing below is being refreshed</span></span>
+  </div>
+} @else {
+  @if (status(); as s) {
+  <div class="batch">
+    <span class="cadence">{{ cadence() }}</span>
+
+    @if (s.services['ingestion']; as ing) {
+      <span class="svc" [class.stalled]="stalled(ing, 'ingestion')">
+        <span class="dot"></span>
+        <b>ingestion</b>
+        <span class="detail"
+              title="lifetime since restart: {{ ing.applied_total }} new · {{ ing.unchanged }} unchanged · {{ ing.dropped_late }} late dropped">
+          {{ ing.tracked }} tracked · last run {{ ing.applied }} new
+          @if (ing.unchanged) { · {{ ing.unchanged }} unchanged }
+          @if (ing.dropped_late) { · {{ ing.dropped_late }} late dropped }
+          · via {{ ing.provider?.toUpperCase() }}
+        </span>
+        <span class="when">{{ stalled(ing, 'ingestion') ? 'last ran ' + age(ing) + 's ago' : countdown(ing) }}</span>
+      </span>
+    } @else {
+      <span class="svc stalled"><span class="dot"></span><b>ingestion</b><span class="detail">not reporting</span></span>
+    }
+
+    @if (s.services['statistics']; as st) {
+      <span class="svc" [class.stalled]="stalled(st, 'statistics')">
+        <span class="dot"></span><b>statistics</b>
+        <span class="detail">{{ st.rated }}/{{ st.windows }} rated</span>
+        <span class="when">{{ age(st) }}s ago</span>
+      </span>
+    } @else {
+      <span class="svc stalled"><span class="dot"></span><b>statistics</b><span class="detail">not reporting</span></span>
+    }
+
+    <span class="svc" [class.stalled]="s.cache !== 'up'">
+      <span class="dot"></span><b>cache</b><span class="detail">{{ s.cache }}</span>
+    </span>
+  </div>
+}
+}
